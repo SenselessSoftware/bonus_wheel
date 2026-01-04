@@ -27,7 +27,7 @@ class BonusWheelWidget extends StatelessWidget {
     }
 
     final prefs = await SharedPreferences.getInstance();
-    final layoutDataString = prefs.getString(layoutName);
+    final layoutDataString = prefs.getString('layout_$layoutName');
     if (layoutDataString == null) {
       return [];
     }

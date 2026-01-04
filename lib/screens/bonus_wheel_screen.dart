@@ -15,15 +15,24 @@ class BonusWheelScreen extends StatefulWidget {
 }
 
 class _BonusWheelScreenState extends State<BonusWheelScreen> {
-  final StreamController<int> _selected = StreamController<int>();
+  final StreamController<int> _selected = StreamController<int>.broadcast();
   final List<String> _layouts = ['Default'];
   String _selectedLayout = 'Default';
   String _selectedValue = '';
+  bool _showSelectedValue = true;
 
   @override
   void initState() {
     super.initState();
+    _loadSettings();
     _loadLayouts();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _showSelectedValue = prefs.getBool('showSelectedValue') ?? true;
+    });
   }
 
   Future<void> _loadLayouts() async {
@@ -32,11 +41,42 @@ class _BonusWheelScreenState extends State<BonusWheelScreen> {
     setState(() {
       _layouts.clear();
       _layouts.add('Default');
-      _layouts.addAll(keys.where((key) => key != 'flutter.version'));
+      _layouts.addAll(keys
+          .where((key) => key.startsWith('layout_'))
+          .map((key) => key.substring(7)));
       if (!_layouts.contains(_selectedLayout)) {
         _selectedLayout = 'Default';
       }
     });
+  }
+
+  Future<void> _deleteLayout(String layoutName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Layout'),
+        content: Text('Are you sure you want to delete the "$layoutName" layout?'),
+        actions: [
+          TextButton(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(false),
+          ),
+          TextButton(
+            child: const Text('Delete'),
+            onPressed: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('layout_$layoutName');
+      setState(() {
+        _selectedLayout = 'Default';
+      });
+      _loadLayouts();
+    }
   }
 
   @override
@@ -58,7 +98,10 @@ class _BonusWheelScreenState extends State<BonusWheelScreen> {
               Navigator.push(
                 context,
                 MaterialPageRoute(builder: (context) => const SettingsScreen()),
-              ).then((_) => _loadLayouts());
+              ).then((_) {
+                _loadLayouts();
+                _loadSettings();
+              });
             },
           ),
         ],
@@ -98,9 +141,15 @@ class _BonusWheelScreenState extends State<BonusWheelScreen> {
                           ).then((_) => _loadLayouts());
                         },
                 ),
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: _selectedLayout == 'Default'
+                      ? null
+                      : () => _deleteLayout(_selectedLayout),
+                ),
               ],
             ),
-            if (_selectedValue.isNotEmpty)
+            if (_showSelectedValue && _selectedValue.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.all(8.0),
                 child: Text(

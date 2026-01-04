@@ -3,8 +3,10 @@ import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_fortune_wheel/flutter_fortune_wheel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xml/xml.dart';
 
 class SettingsScreen extends StatefulWidget {
   final String? layoutName;
@@ -19,6 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _layoutNameController = TextEditingController();
   final List<FortuneItem> _items = [];
   final _textControllers = <TextEditingController>[];
+  bool _showSelectedValue = true;
 
   final Map<String, Color> _colorMap = {
     'Red': Colors.red,
@@ -38,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    _loadSettings();
     if (widget.layoutName != null) {
       _layoutNameController.text = widget.layoutName!;
       _loadLayoutData(widget.layoutName!);
@@ -53,9 +57,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _showSelectedValue = prefs.getBool('showSelectedValue') ?? true;
+    });
+  }
+
   Future<void> _loadLayoutData(String layoutName) async {
     final prefs = await SharedPreferences.getInstance();
-    final layoutDataString = prefs.getString(layoutName);
+    final layoutDataString = prefs.getString('layout_$layoutName');
     if (layoutDataString != null) {
       final layoutData = json.decode(layoutDataString) as List;
       setState(() {
@@ -148,16 +159,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _saveLayout() async {
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('showSelectedValue', _showSelectedValue);
+
     final layoutName = _layoutNameController.text;
     if (layoutName.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Layout name cannot be empty')),
+          const SnackBar(content: Text('Settings saved')),
         );
       }
       return;
     }
+
     if (layoutName == 'Default') {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -175,8 +190,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
-
     final layoutData = List.generate(_items.length, (index) {
       final item = _items[index];
       final text = _textControllers[index].text;
@@ -184,12 +197,126 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return {'text': text, 'color': color};
     }).toList();
 
-    await prefs.setString(layoutName, json.encode(layoutData));
+    await prefs.setString('layout_$layoutName', json.encode(layoutData));
 
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Layout "$layoutName" saved!')));
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Settings and layout "$layoutName" saved!')));
     }
+  }
+
+  Future<void> _importLayoutAsText() async {
+    final xmlStringController = TextEditingController();
+    final xmlString = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Import XML'),
+        content: TextField(
+          controller: xmlStringController,
+          autofocus: true,
+          maxLines: 10,
+          decoration: const InputDecoration(hintText: 'Paste XML here'),
+        ),
+        actions: [
+          TextButton(
+            child: const Text('Cancel'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          TextButton(
+            child: const Text('Import'),
+            onPressed: () {
+              Navigator.of(context).pop(xmlStringController.text);
+            },
+          ),
+        ],
+      ),
+    );
+
+    if (xmlString != null && xmlString.isNotEmpty) {
+      try {
+        final document = XmlDocument.parse(xmlString);
+        _applyXmlDocument(document);
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid XML format')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportLayoutAsText() async {
+    final document = _buildXmlDocument();
+    final xmlString = document.toXmlString(pretty: true);
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Export XML'),
+        content: SingleChildScrollView(child: Text(xmlString)),
+        actions: [
+          TextButton(
+            child: const Text('Copy'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: xmlString));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard')),
+              );
+            },
+          ),
+          TextButton(
+            child: const Text('Close'),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  XmlDocument _buildXmlDocument() {
+    final layoutName = _layoutNameController.text;
+    final builder = XmlBuilder();
+    builder.processing('xml', 'version="1.0"');
+    builder.element('layout', attributes: {'name': layoutName}, nest: () {
+      for (var i = 0; i < _items.length; i++) {
+        final item = _items[i];
+        final text = _textControllers[i].text;
+        final color = item.style?.color.value ?? Colors.blue.value;
+        builder.element('item', attributes: {
+          'text': text,
+          'color': color.toString(),
+        });
+      }
+    });
+    return builder.buildDocument();
+  }
+
+  void _applyXmlDocument(XmlDocument document) {
+    final layoutName = document.rootElement.getAttribute('name');
+    if (layoutName != null) {
+      _layoutNameController.text = layoutName;
+    }
+
+    final items = document.rootElement.findElements('item');
+    setState(() {
+      _items.clear();
+      _textControllers.clear();
+      for (var itemElement in items) {
+        final text = itemElement.getAttribute('text');
+        final colorValue = itemElement.getAttribute('color');
+        if (text != null && colorValue != null) {
+          try {
+            final color = Color(int.parse(colorValue));
+            final item = FortuneItem(
+              child: Text(text),
+              style: FortuneItemStyle(color: color),
+            );
+            _items.add(item);
+            _textControllers.add(TextEditingController(text: text));
+          } catch (e) {
+            // Ignore items with invalid color
+          }
+        }
+      }
+    });
   }
 
   @override
@@ -199,8 +326,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         title: const Text('Settings'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.text_fields),
+            tooltip: 'Import from text',
+            onPressed: _importLayoutAsText,
+          ),
+          IconButton(
+            icon: const Icon(Icons.copy),
+            tooltip: 'Export as text',
+            onPressed: _exportLayoutAsText,
+          ),
+          IconButton(
             icon: const Icon(Icons.save),
-            onPressed: _saveLayout,
+            onPressed: _saveSettings,
           )
         ],
       ),
@@ -208,6 +345,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
         padding: const EdgeInsets.all(8.0),
         child: Column(
           children: [
+            SwitchListTile(
+              title: const Text('Show Selected Value'),
+              value: _showSelectedValue,
+              onChanged: (value) {
+                setState(() {
+                  _showSelectedValue = value;
+                });
+              },
+            ),
             TextField(
               controller: _layoutNameController,
               decoration: const InputDecoration(
